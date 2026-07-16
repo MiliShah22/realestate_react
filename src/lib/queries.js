@@ -211,12 +211,12 @@ export const CREATE_LEAD_MUTATION = `
 `;
 
 export const MY_LEADS_QUERY = `
-  query MyLeads($pagination: PaginationInput) {
-    myLeads(pagination: $pagination) {
+  query myEnquiries($pagination: PaginationInput) {
+    myEnquiries(pagination: $pagination) {
       items {
         id status source budgetLabel message createdAt
         property { id title city priceDisplay images { url isCover } }
-        assignedTo { id name }
+        assignedAgent { id name }
       }
       pageInfo { totalCount hasNextPage }
     }
@@ -230,7 +230,7 @@ export const TENANT_LEADS_QUERY = `
         id status source budgetLabel contactName contactPhone contactEmail
         message createdAt updatedAt
         property { id title city priceDisplay }
-        assignedTo { id name }
+        assignedAgent { id name }
       }
       pageInfo { totalCount hasNextPage }
     }
@@ -251,9 +251,28 @@ export const CREATE_REVIEW_MUTATION = `
 `;
 
 export const MY_REVIEWS_QUERY = `
-  query MyReviews {
-    myReviews { id rating body status createdAt property { id title city } }
+ query MyReviews($pagination: PaginationInput) {
+  myReviews(pagination: $pagination) {
+    items {
+      id
+      rating
+      body
+      status
+      createdAt
+      property {
+        id
+        title
+        city
+      }
+    }
+    pageInfo {
+      totalCount
+      hasNextPage
+      page
+      pageSize
+    }
   }
+}
 `;
 
 // ── SAVED SEARCHES ────────────────────────────────────────────────────────────
