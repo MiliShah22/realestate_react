@@ -1,60 +1,87 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar.jsx';
 import Footer from '../components/Footer.jsx';
 import PropCard from '../components/PropCard.jsx';
-import { PROPERTIES } from '../data/data.js';
+import { gql } from '../lib/gqlClient.js';
+import { PROPERTIES_QUERY } from '../lib/queries.js';
+import { adaptProperties } from '../lib/adapt.js';
 
-function parsePrice(price) {
-  const num = parseFloat(price.replace(/[₹,L Cr]/g, ''));
-  return price.includes('Cr') ? num * 100 : num;
-}
+const BHK_OPTIONS  = ['1 BHK','2 BHK','3 BHK','4 BHK','4+ BHK'];
+const TYPE_OPTIONS = ['APARTMENT','VILLA','PLOT','COMMERCIAL','PG'];
+const STATUS_OPTIONS = [
+  { label:'Ready to Move', val:'READY_TO_MOVE' },
+  { label:'Under Construction', val:'UNDER_CONSTRUCTION' },
+  { label:'New Launch', val:'NEW_LAUNCH' },
+];
 
 export default function SearchPage() {
-  const [params] = useSearchParams();
-  const initialQ = params.get('q') || '';
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
 
-  const [query, setQuery] = useState(initialQ);
-  const [bhkFilters, setBhkFilters] = useState([]);
-  const [sortBy, setSortBy] = useState('relevance');
-  const [view, setView] = useState('grid');
-  const [displayed, setDisplayed] = useState(8);
-  const [minPrice, setMinPrice] = useState(20);
-  const [maxPrice, setMaxPrice] = useState(500);
+  const [query,   setQuery]   = useState(searchParams.get('q') || '');
+  const [city,    setCity]    = useState(searchParams.get('city') || '');
+  const [bhkFilters,  setBhkFilters]  = useState([]);
+  const [typeFilters, setTypeFilters] = useState(
+    searchParams.get('propertyType') ? [searchParams.get('propertyType')] : []
+  );
+  const [statusFilters, setStatusFilters] = useState([]);
+  const [minPrice, setMinPrice] = useState(0);
+  const [maxPrice, setMaxPrice] = useState(50000);
+  const [sortBy,  setSortBy]  = useState('CREATED_AT');
+  const [view,    setView]    = useState('grid');
+  const [page,    setPage]    = useState(1);
+  const PAGE_SIZE = 8;
 
-  useEffect(() => {
-    setQuery(initialQ);
-  }, [initialQ]);
+  const [results,   setResults]   = useState([]);
+  const [pageInfo,  setPageInfo]  = useState({ totalCount:0, hasNextPage:false });
+  const [loading,   setLoading]   = useState(false);
+  const [error,     setError]     = useState('');
 
-  const filtered = useMemo(() => {
-    let list = [...PROPERTIES];
-    if (query) {
-      const q = query.toLowerCase();
-      list = list.filter(
-        (p) => p.name.toLowerCase().includes(q) || p.loc.toLowerCase().includes(q) || p.builder.toLowerCase().includes(q)
-      );
+  function fmtPrice(v) { return v >= 100 ? `₹${(v/100).toFixed(1)}Cr` : `₹${v}L`; }
+
+  const fetchProperties = useCallback(async (pg = 1) => {
+    setLoading(true); setError('');
+    try {
+      const filter = {};
+      if (query)              filter.search = query;
+      if (city)               filter.city   = city;
+      if (bhkFilters.length)  filter.bhk    = bhkFilters;
+      if (typeFilters.length) filter.propertyType = typeFilters;
+      if (statusFilters.length) filter.possessionStatus = statusFilters[0]; // possessionStatus is a string, not enum array
+      if (minPrice > 0)       filter.minPrice = minPrice;
+      if (maxPrice < 50000)   filter.maxPrice = maxPrice;
+      if (searchParams.get('isFeatured')) filter.isFeatured = true;
+
+      const data = await gql(PROPERTIES_QUERY, {
+        filter,
+        pagination: { page: pg, pageSize: PAGE_SIZE },
+        sort: { field: sortBy, direction: 'DESC' },
+      });
+      const items = adaptProperties(data.properties?.items || []);
+      setResults(pg === 1 ? items : prev => [...prev, ...items]);
+      setPageInfo(data.properties?.pageInfo || { totalCount:0, hasNextPage:false });
+      setPage(pg);
+    } catch (e) {
+      setError(e.message || 'Failed to load properties. Please try again.');
+    } finally {
+      setLoading(false);
     }
-    if (bhkFilters.length) {
-      list = list.filter((p) => bhkFilters.includes(p.bhk));
-    }
-    list = list.filter((p) => p.priceLakhs >= minPrice && p.priceLakhs <= maxPrice);
+  }, [query, city, bhkFilters, typeFilters, statusFilters, minPrice, maxPrice, sortBy, searchParams]);
 
-    if (sortBy === 'price-asc') list.sort((a, b) => parsePrice(a.price) - parsePrice(b.price));
-    if (sortBy === 'price-desc') list.sort((a, b) => parsePrice(b.price) - parsePrice(a.price));
+  useEffect(() => { fetchProperties(1); }, [query, city, bhkFilters, typeFilters, statusFilters, minPrice, maxPrice, sortBy]);
 
-    return list;
-  }, [query, bhkFilters, sortBy, minPrice, maxPrice]);
-
-  const toShow = filtered.slice(0, displayed);
-
-  function toggleBhk(val) {
-    setBhkFilters((prev) => (prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]));
-    setDisplayed(8);
+  function toggleFilter(arr, setArr, val) {
+    setArr(prev => prev.includes(val) ? prev.filter(v => v !== val) : [...prev, val]);
+    setPage(1);
   }
 
-  function fmtPrice(v) {
-    return v >= 100 ? `₹${(v / 100).toFixed(1)}Cr` : `₹${v}L`;
+  function clearAll() {
+    setBhkFilters([]); setTypeFilters([]); setStatusFilters([]);
+    setMinPrice(0); setMaxPrice(50000); setQuery(''); setCity('');
   }
+
+  const activeFilterCount = bhkFilters.length + typeFilters.length + statusFilters.length + (minPrice > 0 ? 1 : 0) + (maxPrice < 50000 ? 1 : 0);
 
   return (
     <>
@@ -64,23 +91,18 @@ export default function SearchPage() {
         <div className="search-hero-inner">
           <div className="search-bar-main">
             <div className="sb-inp-wrap">
-              <i className="ti ti-map-pin" aria-hidden="true"></i>
-              <input
-                className="sb-inp"
-                placeholder="Search by city, locality, project..."
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
+              <i className="ti ti-map-pin"></i>
+              <input className="sb-inp" placeholder="City, locality, project name…"
+                value={query} onChange={e => setQuery(e.target.value)} />
             </div>
-            <select className="sb-sel" onChange={(e) => e.target.value && toggleBhk(e.target.value)}>
-              <option value="">Any BHK</option>
-              <option>1 BHK</option>
-              <option>2 BHK</option>
-              <option>3 BHK</option>
-              <option>4 BHK</option>
+            <input className="sb-inp" style={{minWidth:130,flex:'0 0 auto'}} placeholder="City…"
+              value={city} onChange={e => setCity(e.target.value)} />
+            <select className="sb-sel" onChange={e => e.target.value && toggleFilter(bhkFilters,setBhkFilters,e.target.value)}>
+              <option value="">BHK Type</option>
+              {BHK_OPTIONS.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
-            <button className="sb-btn" onClick={() => setDisplayed(8)}>
-              <i className="ti ti-search" aria-hidden="true"></i> Search
+            <button className="sb-btn" onClick={() => fetchProperties(1)}>
+              <i className="ti ti-search"></i> Search
             </button>
           </div>
         </div>
@@ -90,159 +112,142 @@ export default function SearchPage() {
         <aside className="sidebar">
           <div className="filter-box">
             <div className="filter-title">
-              Budget (₹){' '}
-              <span
-                className="filter-clear"
-                onClick={() => {
-                  setMinPrice(20);
-                  setMaxPrice(500);
-                }}
-              >
-                Reset
-              </span>
+              Budget (₹)
+              <span className="filter-clear" onClick={() => { setMinPrice(0); setMaxPrice(50000); }}>Reset</span>
             </div>
             <div className="price-range">
-              <div className="range-labels">
-                <span>₹20L</span>
-                <span>₹5Cr</span>
-              </div>
-              <input
-                type="range"
-                min="20"
-                max="500"
-                step="5"
-                value={minPrice}
-                onChange={(e) => setMinPrice(Number(e.target.value))}
-              />
-              <input
-                type="range"
-                min="20"
-                max="500"
-                step="5"
-                value={maxPrice}
-                onChange={(e) => setMaxPrice(Number(e.target.value))}
-              />
-              <div className="range-val">
-                {fmtPrice(minPrice)} – {maxPrice >= 500 ? '₹5Cr+' : fmtPrice(maxPrice)}
-              </div>
+              <div className="range-labels"><span>₹0</span><span>₹5Cr+</span></div>
+              <input type="range" min="0" max="50000" step="50" value={minPrice}
+                onChange={e => setMinPrice(Number(e.target.value))} />
+              <input type="range" min="0" max="50000" step="50" value={maxPrice}
+                onChange={e => setMaxPrice(Number(e.target.value))} />
+              <div className="range-val">{fmtPrice(minPrice)} – {maxPrice >= 50000 ? '₹5Cr+' : fmtPrice(maxPrice)}</div>
             </div>
           </div>
 
           <div className="filter-box">
             <div className="filter-title">BHK Type</div>
-            {[
-              ['1 BHK', '4,200'],
-              ['2 BHK', '18,400'],
-              ['3 BHK', '12,800'],
-              ['4 BHK', '3,100'],
-            ].map(([label, count]) => (
-              <div className="filter-option" key={label}>
-                <input
-                  type="checkbox"
-                  id={label}
-                  checked={bhkFilters.includes(label)}
-                  onChange={() => toggleBhk(label)}
-                />
-                <label htmlFor={label}>{label}</label>
-                <span>{count}</span>
+            {BHK_OPTIONS.map(b => (
+              <div className="filter-option" key={b}>
+                <input type="checkbox" id={`bhk-${b}`}
+                  checked={bhkFilters.includes(b)}
+                  onChange={() => toggleFilter(bhkFilters, setBhkFilters, b)} />
+                <label htmlFor={`bhk-${b}`}>{b}</label>
+              </div>
+            ))}
+          </div>
+
+          <div className="filter-box">
+            <div className="filter-title">Property Type</div>
+            {TYPE_OPTIONS.map(t => (
+              <div className="filter-option" key={t}>
+                <input type="checkbox" id={`type-${t}`}
+                  checked={typeFilters.includes(t)}
+                  onChange={() => toggleFilter(typeFilters, setTypeFilters, t)} />
+                <label htmlFor={`type-${t}`}>{t.charAt(0) + t.slice(1).toLowerCase()}</label>
               </div>
             ))}
           </div>
 
           <div className="filter-box">
             <div className="filter-title">Possession Status</div>
-            {[
-              ['Ready to Move', '9,800'],
-              ['Under Construction', '15,400'],
-              ['New Launch', '3,200'],
-            ].map(([label, count]) => (
-              <div className="filter-option" key={label}>
-                <input type="checkbox" id={label} />
-                <label htmlFor={label}>{label}</label>
-                <span>{count}</span>
+            {STATUS_OPTIONS.map(s => (
+              <div className="filter-option" key={s.val}>
+                <input type="checkbox" id={`status-${s.val}`}
+                  checked={statusFilters.includes(s.val)}
+                  onChange={() => toggleFilter(statusFilters, setStatusFilters, s.val)} />
+                <label htmlFor={`status-${s.val}`}>{s.label}</label>
               </div>
             ))}
           </div>
 
-          <div className="filter-box">
-            <div className="filter-title">Amenities</div>
-            {['Swimming Pool', 'Gym / Fitness Centre', 'Clubhouse', '24x7 Security', 'Power Backup', 'Covered Parking'].map(
-              (label) => (
-                <div className="filter-option" key={label}>
-                  <input type="checkbox" id={label} />
-                  <label htmlFor={label}>{label}</label>
-                </div>
-              )
-            )}
-          </div>
-
-          <button className="apply-filters" onClick={() => setDisplayed(8)}>
-            Apply Filters
-          </button>
+          {activeFilterCount > 0 && (
+            <button className="apply-filters" onClick={clearAll}>
+              Clear All Filters ({activeFilterCount})
+            </button>
+          )}
         </aside>
 
         <main>
           <div className="results-header">
             <div className="results-count">
-              Showing <strong>{filtered.length} properties</strong> {query && `for "${query}"`}
+              {loading ? 'Searching…' : (
+                <>Showing <strong>{results.length}</strong> of <strong>{pageInfo.totalCount}</strong> properties
+                  {query && ` for "${query}"`}
+                  {city && ` in ${city}`}
+                </>
+              )}
             </div>
             <div className="sort-bar">
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                <option value="relevance">Sort: Relevance</option>
-                <option value="price-asc">Price: Low to High</option>
-                <option value="price-desc">Price: High to Low</option>
+              <select value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(1); }}>
+                <option value="CREATED_AT">Sort: Newest</option>
+                <option value="PRICE">Price: Low → High</option>
+                <option value="VIEW_COUNT">Most Viewed</option>
+                <option value="RATING">Highest Rated</option>
               </select>
               <div className="view-toggle">
-                <button className={`vt-btn ${view === 'grid' ? 'active' : ''}`} onClick={() => setView('grid')}>
-                  <i className="ti ti-layout-grid" aria-hidden="true"></i>
+                <button className={`vt-btn ${view==='grid'?'active':''}`} onClick={() => setView('grid')}>
+                  <i className="ti ti-layout-grid"></i>
                 </button>
-                <button className={`vt-btn ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>
-                  <i className="ti ti-list" aria-hidden="true"></i>
+                <button className={`vt-btn ${view==='list'?'active':''}`} onClick={() => setView('list')}>
+                  <i className="ti ti-list"></i>
                 </button>
               </div>
             </div>
           </div>
 
-          {bhkFilters.length > 0 && (
-            <div className="active-filters" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-              {bhkFilters.map((f) => (
-                <div
-                  key={f}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    background: '#e8ebf5',
-                    color: 'var(--navy)',
-                    fontSize: 12,
-                    fontWeight: 500,
-                    padding: '5px 10px',
-                    borderRadius: 20,
-                  }}
-                >
+          {/* Active filter tags */}
+          {(bhkFilters.length > 0 || typeFilters.length > 0) && (
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>
+              {[...bhkFilters,...typeFilters].map(f => (
+                <div key={f} style={{display:'flex',alignItems:'center',gap:6,background:'#e8ebf5',color:'var(--navy)',fontSize:12,fontWeight:500,padding:'5px 10px',borderRadius:20}}>
                   {f}
-                  <button
-                    onClick={() => toggleBhk(f)}
-                    style={{ background: 'none', border: 'none', color: 'var(--navy2)', cursor: 'pointer' }}
-                  >
-                    ×
-                  </button>
+                  <button onClick={() => {
+                    if (bhkFilters.includes(f)) toggleFilter(bhkFilters,setBhkFilters,f);
+                    else toggleFilter(typeFilters,setTypeFilters,f);
+                  }} style={{background:'none',border:'none',cursor:'pointer',color:'var(--navy)'}}>×</button>
                 </div>
               ))}
             </div>
           )}
 
-          <div className={`results-grid ${view === 'list' ? 'list-view' : ''}`}>
-            {toShow.map((p) => (
-              <PropCard key={p.id} p={p} listView={view === 'list'} />
-            ))}
-          </div>
+          {error && (
+            <div style={{background:'#fde8e8',border:'1px solid #f5c0c0',borderRadius:8,padding:'14px 16px',fontSize:14,color:'var(--danger)',marginBottom:16,display:'flex',gap:8}}>
+              <i className="ti ti-alert-circle"></i> {error}
+              <button style={{marginLeft:'auto',background:'none',border:'none',cursor:'pointer',color:'var(--danger)'}} onClick={() => fetchProperties(1)}>Retry</button>
+            </div>
+          )}
 
-          {displayed < filtered.length && (
+          {loading && results.length === 0 ? (
+            <div style={{textAlign:'center',padding:'60px',color:'var(--text3)'}}>
+              <i className="ti ti-loader-2" style={{fontSize:36,animation:'spin 1s linear infinite',display:'block',marginBottom:12}}></i>
+              Searching properties…
+              <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+            </div>
+          ) : results.length === 0 && !loading ? (
+            <div style={{textAlign:'center',padding:'60px',color:'var(--text3)'}}>
+              <i className="ti ti-building-off" style={{fontSize:44,display:'block',marginBottom:12,opacity:0.3}}></i>
+              <p style={{fontSize:15,marginBottom:8}}>No properties found</p>
+              <p style={{fontSize:13}}>Try adjusting your filters or search in a different city.</p>
+              <button className="btn-outline" style={{marginTop:16,padding:'10px 20px'}} onClick={clearAll}>Clear filters</button>
+            </div>
+          ) : (
+            <div className={`results-grid ${view==='list'?'list-view':''}`}>
+              {results.map(p => <PropCard key={p.id} p={p} />)}
+            </div>
+          )}
+
+          {pageInfo.hasNextPage && !loading && (
             <div className="load-more-wrap">
-              <button className="btn-outline" style={{ padding: '12px 32px' }} onClick={() => setDisplayed((d) => d + 4)}>
+              <button className="btn-outline" style={{padding:'12px 32px'}}
+                onClick={() => fetchProperties(page + 1)}>
                 Load more properties
               </button>
+            </div>
+          )}
+          {loading && results.length > 0 && (
+            <div style={{textAlign:'center',padding:20,color:'var(--text3)',fontSize:13}}>
+              <i className="ti ti-loader-2" style={{animation:'spin 1s linear infinite'}}></i> Loading more…
             </div>
           )}
         </main>

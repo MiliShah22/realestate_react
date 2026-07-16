@@ -1,127 +1,144 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import {
+  gql, setTokens, clearTokens, loadRefreshToken, restoreSession, getAccessToken
+} from '../lib/gqlClient.js';
+import {
+  LOGIN_MUTATION, SIGNUP_MUTATION, LOGOUT_MUTATION,
+  CHANGE_PASSWORD_MUTATION, ME_QUERY
+} from '../lib/queries.js';
 
 const AuthContext = createContext(null);
 
-// ── DEFAULT DEMO ACCOUNTS ──────────────────────────────────────────────────
+// Demo account hints still shown on the login page (display only, not used for auth)
 export const DEFAULT_ACCOUNTS = [
   {
-    id: 'default-customer-001',
     role: 'customer',
-    name: 'Arjun Reddy',
     email: 'customer@estatiq.in',
     password: 'Customer@123',
-    phone: '+91 98765 43210',
-    city: 'Bengaluru',
-    businessName: '',
-    gstin: '',
-    createdAt: '2024-01-15T09:00:00.000Z',
-    isDefault: true,
+    name: 'Arjun Reddy',
     avatar: 'AR',
-    savedProperties: [1, 3],
-    enquiriesSent: 2,
   },
   {
-    id: 'default-franchise-001',
     role: 'franchise',
-    name: 'Priya Sharma',
     email: 'franchise@estatiq.in',
     password: 'Franchise@123',
-    phone: '+91 91234 56789',
-    city: 'Mumbai',
-    businessName: 'Sharma Realty Pvt Ltd',
-    gstin: '27AABCS1429B1ZB',
-    createdAt: '2024-01-10T09:00:00.000Z',
-    isDefault: true,
+    name: 'Priya Sharma',
     avatar: 'PS',
-    totalListings: 62,
-    activeLeads: 18,
-    dealsClosedMonth: 4,
-    revenue: '₹8.4L',
   },
 ];
 
-// ── SEED defaults into localStorage if not already present ─────────────────
-function seedDefaultAccounts() {
-  try {
-    const existing = JSON.parse(localStorage.getItem('estatiq_users') || '[]');
-    let changed = false;
-    for (const acc of DEFAULT_ACCOUNTS) {
-      if (!existing.find(u => u.email === acc.email)) {
-        existing.push(acc);
-        changed = true;
-      }
-    }
-    if (changed) localStorage.setItem('estatiq_users', JSON.stringify(existing));
-  } catch {}
-}
-
-// ── HELPERS ────────────────────────────────────────────────────────────────
-export function getUsers() {
-  try { return JSON.parse(localStorage.getItem('estatiq_users') || '[]'); } catch { return []; }
-}
-export function saveUsers(users) {
-  localStorage.setItem('estatiq_users', JSON.stringify(users));
-}
-export function findUser(email) {
-  return getUsers().find(u => u.email.toLowerCase() === email.toLowerCase());
-}
-export function registerUser(userData) {
-  const users = getUsers();
-  if (findUser(userData.email)) return { error: 'Email already registered' };
-  const newUser = { ...userData, id: Date.now(), createdAt: new Date().toISOString() };
-  saveUsers([...users, newUser]);
-  return { user: newUser };
-}
-export function updatePassword(email, newPassword) {
-  const users = getUsers();
-  const idx = users.findIndex(u => u.email.toLowerCase() === email.toLowerCase());
-  if (idx === -1) return false;
-  users[idx].password = newPassword;
-  saveUsers(users);
-  return true;
-}
-
-// ── AUTH CONTEXT ───────────────────────────────────────────────────────────
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // On mount: try to restore session from stored refresh token
   useEffect(() => {
-    seedDefaultAccounts();
-    const stored = localStorage.getItem('estatiq_user');
-    if (stored) {
-      try { setUser(JSON.parse(stored)); } catch {}
-    }
-    setLoading(false);
+    (async () => {
+      try {
+        const me = await restoreSession();
+        if (me) setUser(me);
+      } catch {
+        // No valid session — stay logged out
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, []);
 
-  function login(userData) {
-    setUser(userData);
-    localStorage.setItem('estatiq_user', JSON.stringify(userData));
-  }
+  // ── Login ──────────────────────────────────────────────────────────────
+  const login = useCallback(async (email, password, role) => {
+    const gqlRole = role === 'franchise' ? 'FRANCHISE_OWNER' : 'CUSTOMER';
+    const data = await gql(LOGIN_MUTATION, { email, password, role: gqlRole });
+    const { accessToken, refreshToken, user: me } = data.login;
+    setTokens(accessToken, refreshToken);
+    const normalized = normalizeUser(me);
+    setUser(normalized);
+    localStorage.setItem('estatiq_user', JSON.stringify(normalized));
+    return normalized;
+  }, []);
 
-  function logout() {
+  // ── Signup ─────────────────────────────────────────────────────────────
+  const signup = useCallback(async (formData, role) => {
+    const input = {
+      name:         formData.name,
+      email:        formData.email,
+      password:     formData.password,
+      phone:        formData.phone,
+      city:         formData.city,
+      role:         role === 'franchise' ? 'FRANCHISE_OWNER' : 'CUSTOMER',
+      businessName: formData.businessName || undefined,
+      gstin:        formData.gstin        || undefined,
+    };
+    const data = await gql(SIGNUP_MUTATION, { input });
+    const { accessToken, refreshToken, user: me } = data.signup;
+    setTokens(accessToken, refreshToken);
+    const normalized = normalizeUser(me);
+    setUser(normalized);
+    localStorage.setItem('estatiq_user', JSON.stringify(normalized));
+    return normalized;
+  }, []);
+
+  // ── Logout ─────────────────────────────────────────────────────────────
+  const logout = useCallback(async () => {
+    const rt = loadRefreshToken();
+    try {
+      if (rt) await gql(LOGOUT_MUTATION, { refreshToken: rt });
+    } catch { /* best-effort */ }
     setUser(null);
+    clearTokens();
     localStorage.removeItem('estatiq_user');
-  }
+  }, []);
 
-  function updateUser(data) {
-    const updated = { ...user, ...data };
-    setUser(updated);
-    localStorage.setItem('estatiq_user', JSON.stringify(updated));
-    // also update in users list
-    const users = getUsers();
-    const idx = users.findIndex(u => u.id === updated.id);
-    if (idx !== -1) { users[idx] = updated; saveUsers(users); }
-  }
+  // ── Change password ────────────────────────────────────────────────────
+  const changePassword = useCallback(async (currentPassword, newPassword) => {
+    const data = await gql(CHANGE_PASSWORD_MUTATION, { currentPassword, newPassword });
+    return data.changePassword;
+  }, []);
+
+  // ── Refresh user profile from API ──────────────────────────────────────
+  const refreshUser = useCallback(async () => {
+    try {
+      const data = await gql(ME_QUERY);
+      const normalized = normalizeUser(data.me);
+      setUser(normalized);
+      localStorage.setItem('estatiq_user', JSON.stringify(normalized));
+      return normalized;
+    } catch { return null; }
+  }, []);
+
+  // Merge partial update into current user (optimistic, no extra API call)
+  const updateUser = useCallback((patch) => {
+    setUser(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, ...patch };
+      localStorage.setItem('estatiq_user', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, updateUser, loading }}>
+    <AuthContext.Provider value={{ user, loading, login, signup, logout, changePassword, refreshUser, updateUser, getAccessToken }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
-export function useAuth() {
-  return useContext(AuthContext);
+export function useAuth() { return useContext(AuthContext); }
+
+// ── Normalise API user → consistent shape for UI ──────────────────────────
+function normalizeUser(me) {
+  if (!me) return null;
+  const isFranchise = me.role === 'FRANCHISE_OWNER' || me.role === 'FRANCHISE_STAFF';
+  const role     = isFranchise ? 'franchise' : 'customer';
+  const initials = me.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  return {
+    ...me,
+    role,                          // 'customer' | 'franchise' (UI-friendly)
+    apiRole: me.role,              // original enum: CUSTOMER | FRANCHISE_OWNER | ...
+    // The API returns avatarUrl; our UI uses avatar everywhere
+    avatar: me.avatarUrl || initials,
+    // businessName / gstin live on the tenant, not the user
+    businessName: me.tenant?.name || '',
+    gstin: '',
+  };
 }
