@@ -9,7 +9,7 @@ import { useApi, useMutation } from '../hooks/useApi.js';
 import { gql } from '../lib/gqlClient.js';
 import { adaptProperty, adaptProperties } from '../lib/adapt.js';
 import {
-  DASHBOARD_STATS_QUERY, MY_TENANT_QUERY, MY_PROPERTIES_QUERY,
+  DASHBOARD_STATS_QUERY, CUSTOMER_DASHBOARD_STATS_QUERY, MY_TENANT_QUERY, MY_PROPERTIES_QUERY,
   SAVED_PROPERTIES_QUERY, MY_LEADS_QUERY, TENANT_LEADS_QUERY,
   MY_SAVED_SEARCHES_QUERY, TOGGLE_SEARCH_ALERT_MUTATION, DELETE_SAVED_SEARCH_MUTATION,
   MY_REVIEWS_QUERY, UPDATE_LEAD_STATUS_MUTATION, UPDATE_PROFILE_MUTATION,
@@ -46,7 +46,8 @@ function Toggle({ initial = false, onChange }) {
 
 /* ── CUSTOMER SECTIONS ── */
 function CustomerOverview({ user, navigate, savedCount, leads }) {
-  const { data: statsData, loading } = useApi(DASHBOARD_STATS_QUERY, {}, { skip: true }); // reserved
+  const { data: statsData, loading } = useApi(CUSTOMER_DASHBOARD_STATS_QUERY, {}); // reserved
+  const stats = statsData?.customerDashboardStats || { savedProperties: savedCount, enquiriesSent: leads?.length || 0, convertedLeads: leads?.filter(l => l.status === 'CONVERTED').length || 0, activeAlerts: 3 };
   return (
     <div>
       <div className="customer-welcome">
@@ -62,10 +63,10 @@ function CustomerOverview({ user, navigate, savedCount, leads }) {
         </div>
       </div>
       <div className="stat-cards">
-        <div className="stat-card"><div className="sc-num">{savedCount}</div><div className="sc-label">Saved Properties</div></div>
-        <div className="stat-card"><div className="sc-num">{leads?.length || 0}</div><div className="sc-label">Enquiries Sent</div></div>
-        <div className="stat-card"><div className="sc-num">{leads?.filter(l => l.status === 'CONVERTED').length || 0}</div><div className="sc-label">Site Visits</div></div>
-        <div className="stat-card"><div className="sc-num">3</div><div className="sc-label">Active Alerts</div></div>
+        <div className="stat-card"><div className="sc-num">{stats.savedProperties}</div><div className="sc-label">Saved Properties</div></div>
+        <div className="stat-card"><div className="sc-num">{stats.enquiriesSent}</div><div className="sc-label">Enquiries Sent</div></div>
+        <div className="stat-card"><div className="sc-num">{stats.convertedLeads}</div><div className="sc-label">Site Visits</div></div>
+        <div className="stat-card"><div className="sc-num">{stats.activeAlerts}</div><div className="sc-label">Active Alerts</div></div>
       </div>
       <div style={{ marginTop: 20 }}>
         <div className="section-head"><h2 className="section-title" style={{ fontSize: 18 }}>Quick Actions</h2></div>
@@ -80,7 +81,7 @@ function CustomerOverview({ user, navigate, savedCount, leads }) {
 
 function SavedPropertiesSection({ navigate }) {
   const { data, loading, error, refetch } = useApi(SAVED_PROPERTIES_QUERY);
-  const saved = data?.savedProperties || [];
+  const saved = data?.savedProperties?.items || [];
   if (loading) return <Spinner text="Loading saved properties…" />;
   if (error) return <ApiError error={error} onRetry={refetch} />;
   return (
@@ -609,7 +610,7 @@ export default function DashboardPage() {
   const { data: myLeadsData } = useApi(
     MY_LEADS_QUERY, { pagination: { page: 1, pageSize: 5 } }, { skip: !isCustomer }
   );
-  const savedCount = 0; // optimistic — updated by SavedPropertiesSection
+  let savedCount = 0; // optimistic — updated by SavedPropertiesSection
 
   useEffect(() => {
     const s = searchParams.get('section');

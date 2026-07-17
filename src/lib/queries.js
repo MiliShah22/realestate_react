@@ -323,9 +323,30 @@ export const DASHBOARD_STATS_QUERY = `
     dashboardStats { totalProperties activeUsers monthlyRevenuePaise pendingReviews franchiseCount newLeads }
   }
 `;
+export const CUSTOMER_DASHBOARD_STATS_QUERY = `
+query CustomerDashboardStats {
+  customerDashboardStats {
+    savedProperties
+    enquiriesSent
+    convertedLeads
+    activeAlerts
+  }
+}
+`;
 
 export const MONTHLY_METRICS_QUERY = `
   query MonthlyMetrics($months: Int) {
     monthlyMetrics(months: $months) { month revenuePaise leads propertiesListed }
+  }
+`;
+export const PROPERTY_TYPE_COUNTS_QUERY = `
+  query PropertyTypeCounts {
+    propertyTypeCounts { propertyType label count }
+  }
+`;
+
+export const TOP_CITIES_QUERY = `
+  query TopCities($limit: Int) {
+    topCities(limit: $limit) { city count }
   }
 `;
