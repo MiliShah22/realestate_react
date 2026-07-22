@@ -4,7 +4,7 @@ import Navbar from '../components/Navbar.jsx';
 import Footer from '../components/Footer.jsx';
 import PropCard from '../components/PropCard.jsx';
 import { gql } from '../lib/gqlClient.js';
-import { PROPERTIES_QUERY, PROPERTY_TYPE_COUNTS_QUERY, TOP_CITIES_QUERY } from '../lib/queries.js';
+import { PROPERTIES_QUERY, PROPERTY_TYPE_COUNTS_QUERY, TOP_CITIES_QUERY, PLATFORM_STATS_QUERY } from '../lib/queries.js';
 import { adaptProperties } from '../lib/adapt.js';
 
 const TABS = [
@@ -48,6 +48,79 @@ export default function HomePage() {
 
   const [cities, setCities] = useState([]);
   const [loadingCities, setLoadingCities] = useState(true);
+  const [stats, setStats] = useState(null);
+
+  const [loadingStats, setLoadingStats] = useState(true);
+
+  useEffect(() => {
+
+    let cancelled = false;
+
+    (async () => {
+
+      const [featuredRes, typesRes, citiesRes, statsRes] = await Promise.allSettled([
+
+        gql(PROPERTIES_QUERY, {
+
+          filter: { isFeatured: true },
+
+          pagination: { page: 1, pageSize: 4 },
+
+          sort: { field: 'VIEW_COUNT', direction: 'DESC' },
+
+        }),
+
+        gql(PROPERTY_TYPE_COUNTS_QUERY),
+
+        gql(TOP_CITIES_QUERY, { limit: 6 }),
+
+        gql(PLATFORM_STATS_QUERY),
+
+      ]);
+
+      if (cancelled) return;
+
+      setFeatured(
+
+        featuredRes.status === 'fulfilled'
+
+          ? adaptProperties(featuredRes.value.properties?.items || [])
+
+          : []
+
+      );
+
+      setLoadingFeatured(false);
+
+      setTypeCounts(
+
+        typesRes.status === 'fulfilled' ? typesRes.value.propertyTypeCounts || [] : []
+
+      );
+
+      setLoadingTypes(false);
+
+      setCities(
+
+        citiesRes.status === 'fulfilled' ? citiesRes.value.topCities || [] : []
+
+      );
+
+      setLoadingCities(false);
+
+      setStats(
+
+        statsRes.status === 'fulfilled' ? statsRes.value.platformStats || null : null
+
+      );
+
+      setLoadingStats(false);
+
+    })();
+
+    return () => { cancelled = true; };
+
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -112,13 +185,25 @@ export default function HomePage() {
         <p className="hero-sub">Search from verified properties across 30+ cities</p>
 
         <div className="hero-stats">
-          <div><div className="h-stat-num">2.4L+</div><div className="h-stat-lbl">Properties</div></div>
-          <div className="h-stat-div"></div>
-          <div><div className="h-stat-num">30+</div><div className="h-stat-lbl">Cities</div></div>
-          <div className="h-stat-div"></div>
-          <div><div className="h-stat-num">8.1L</div><div className="h-stat-lbl">Buyers</div></div>
-          <div className="h-stat-div"></div>
-          <div><div className="h-stat-num">95K+</div><div className="h-stat-lbl">Agents</div></div>
+          <div>
+            <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : `${formatCount(stats?.totalProperties || 0)}+`}</div>
+            <div className="h-stat-lbl">Properties</div>
+          </div>
+          <div className="hero-stats-div"></div>
+          <div>
+            <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : `${stats?.totalCities || 0}+`}</div>
+            <div className="h-stat-lbl">Cities</div>
+          </div>
+          <div className="hero-stats-div"></div>
+          <div>
+            <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : formatCount(stats?.totalBuyers || 0)}</div>
+            <div className="h-stat-lbl">Buyers</div>
+          </div>
+          <div className="hero-stats-div"></div>
+          <div>
+            <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : `${formatCount(stats?.totalAgents || 0)}+`}</div>
+            <div className="h-stat-lbl">Agents</div>
+          </div>
         </div>
 
         <div className="search-box">
@@ -150,6 +235,7 @@ export default function HomePage() {
               <i className="ti ti-search"></i> Search
             </button>
           </div>
+          {/* unchanged — tabs, search row, BHK/budget selects, search button */}
         </div>
       </section>
 

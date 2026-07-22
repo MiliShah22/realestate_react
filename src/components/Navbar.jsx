@@ -3,13 +3,23 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const PAGES = [
-  { label: 'Buy', href: '/search' },
+  { label: 'Buy', href: '/search?type=buy' },
   { label: 'Rent', href: '/search?type=rent' },
   { label: 'New Projects', href: '/search?type=projects' },
   { label: 'Commercial', href: '/search?type=commercial' },
   { label: 'Map View', href: '/map' },
   { label: 'Agents', href: '/dashboard' },
 ];
+
+function isPageActive(page, pathname, search) {
+  const [base, qs] = page.href.split('?');
+  if (pathname !== base) return false;
+  if (base !== '/search') return true; // non-search pages: pathname match is enough
+
+  const linkType = new URLSearchParams(qs || '').get('type');
+  const currentType = new URLSearchParams(search).get('type');
+  return linkType === currentType;
+}
 
 export default function Navbar() {
   const location = useLocation();
@@ -36,7 +46,7 @@ export default function Navbar() {
     navigate('/');
   }
 
-  const initials = user ? user.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2) : '';
+  const initials = user ? user.name?.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : '';
 
   return (
     <>
@@ -45,8 +55,7 @@ export default function Navbar() {
 
         <div className="nav-links">
           {PAGES.map(p => {
-            const base = p.href.split('?')[0];
-            const active = location.pathname === base;
+            const active = isPageActive(p, location.pathname, location.search);
             return (
               <Link key={p.label} to={p.href} className={`nav-link ${active ? 'active' : ''}`}>{p.label}</Link>
             );
@@ -105,9 +114,12 @@ export default function Navbar() {
 
       {/* Mobile nav overlay */}
       <div className={`mobile-nav ${menuOpen ? 'open' : ''}`}>
-        {PAGES.map(p => (
-          <Link key={p.label} to={p.href} className="nav-link" onClick={() => setMenuOpen(false)}>{p.label}</Link>
-        ))}
+        {PAGES.map(p => {
+          const active = isPageActive(p, location.pathname, location.search);
+          return (
+            <Link key={p.label} to={p.href} className={`nav-link ${active ? 'active' : ''}`} onClick={() => setMenuOpen(false)}>{p.label}</Link>
+          );
+        })}
         <div className="mobile-nav-btns">
           {user ? (
             <>

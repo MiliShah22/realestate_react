@@ -350,3 +350,16 @@ export const TOP_CITIES_QUERY = `
     topCities(limit: $limit) { city count }
   }
 `;
+export const PLATFORM_STATS_QUERY = `
+  query PlatformStats {
+    platformStats { totalProperties totalCities totalBuyers totalAgents }
+  }
+`;
+export const SEARCH_FILTER_OPTIONS_QUERY = `
+  query SearchFilterOptions {
+    propertyTypeCounts { propertyType label count }
+    topCities(limit: 30) { city count }
+    bhkOptions
+    possessionStatusOptions
+  }
+`;
