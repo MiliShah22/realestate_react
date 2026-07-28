@@ -63,15 +63,19 @@ export default function SearchPage() {
     const propertyTypeParam = searchParams.get('propertyType'); // from homepage "Browse by Property Type" tiles
     const cityParam = searchParams.get('city');                 // from homepage "Top Cities" tiles
     const qParam = searchParams.get('q');
+    const bhkParam = searchParams.get('bhk');                   // from homepage hero search BHK select
+    const minPriceParam = searchParams.get('minPrice');         // from homepage hero search Budget select
+    const maxPriceParam = searchParams.get('maxPrice');
 
     setListingType(derived.listingType || '');
     setTypeFilters(propertyTypeParam ? [propertyTypeParam] : (derived.propertyType ? [derived.propertyType] : []));
     setStatusFilters(derived.possessionStatus ? [derived.possessionStatus] : []);
     setCity(cityParam || '');
     setQuery(qParam || '');
-    setBhkFilters([]);
-    setMinPrice(0);
-    setMaxPrice(50000);
+    setBhkFilters(bhkParam ? [bhkParam] : []);
+    // URL carries paise (e.g. from the homepage Budget dropdown); the slider works in Lakhs.
+    setMinPrice(minPriceParam ? Number(minPriceParam) / 10000000 : 0);
+    setMaxPrice(maxPriceParam ? Number(maxPriceParam) / 10000000 : 50000);
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams.toString()]);
@@ -115,8 +119,9 @@ export default function SearchPage() {
       // Schema's propertyType is a single enum, not a list — only the first selection applies.
       if (typeFilters.length) filter.propertyType = typeFilters[0];
       if (statusFilters.length) filter.possessionStatus = statusFilters[0];
-      if (minPrice > 0) filter.minPrice = minPrice;
-      if (maxPrice < 50000) filter.maxPrice = maxPrice;
+      // Slider is in Lakhs for readability; backend compares against price_paise directly.
+      if (minPrice > 0) filter.minPrice = Math.round(minPrice * 10000000);
+      if (maxPrice < 50000) filter.maxPrice = Math.round(maxPrice * 10000000);
       if (searchParams.get('isFeatured')) filter.isFeatured = true;
 
       const data = await gql(PROPERTIES_QUERY, {

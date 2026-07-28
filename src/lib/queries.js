@@ -190,18 +190,18 @@ export const ADD_PROPERTY_IMAGES_MUTATION = `
   }
 `;
 
-export const MY_PROPERTIES_QUERY = `
-  query MyProperties($tenantId: ID!, $pagination: PaginationInput) {
-    properties(
-      filter: { tenantId: $tenantId }
-      pagination: $pagination
-      sort: { field: CREATED_AT, direction: DESC }
-    ) {
-      items { ${CARD} }
-      pageInfo { page pageSize totalCount hasNextPage }
-    }
-  }
-`;
+// export const MY_PROPERTIES_QUERY = `
+//   query MyProperties($tenantId: ID!, $pagination: PaginationInput) {
+//     properties(
+//       filter: { tenantId: $tenantId }
+//       pagination: $pagination
+//       sort: { field: CREATED_AT, direction: DESC }
+//     ) {
+//       items { ${CARD} }
+//       pageInfo { page pageSize totalCount hasNextPage }
+//     }
+//   }
+// `;
 
 // ── LEADS ─────────────────────────────────────────────────────────────────────
 export const CREATE_LEAD_MUTATION = `
@@ -223,25 +223,25 @@ export const MY_LEADS_QUERY = `
   }
 `;
 
-export const TENANT_LEADS_QUERY = `
-  query TenantLeads($filter: LeadFilter, $pagination: PaginationInput) {
-    tenantLeads(filter: $filter, pagination: $pagination) {
-      items {
-        id status source budgetLabel contactName contactPhone contactEmail
-        message createdAt updatedAt
-        property { id title city priceDisplay }
-        assignedAgent { id name }
-      }
-      pageInfo { totalCount hasNextPage }
-    }
-  }
-`;
+// export const TENANT_LEADS_QUERY = `
+//   query TenantLeads($filter: LeadFilter, $pagination: PaginationInput) {
+//     tenantLeads(filter: $filter, pagination: $pagination) {
+//       items {
+//         id status source budgetLabel contactName contactPhone contactEmail
+//         message createdAt updatedAt
+//         property { id title city priceDisplay }
+//         assignedAgent { id name }
+//       }
+//       pageInfo { totalCount hasNextPage }
+//     }
+//   }
+// `;
 
-export const UPDATE_LEAD_STATUS_MUTATION = `
-  mutation UpdateLeadStatus($id: ID!, $status: LeadStatus!, $notes: String) {
-    updateLeadStatus(id: $id, status: $status, notes: $notes) { id status updatedAt }
-  }
-`;
+// export const UPDATE_LEAD_STATUS_MUTATION = `
+//   mutation UpdateLeadStatus($id: ID!, $status: LeadStatus!, $notes: String) {
+//     updateLeadStatus(id: $id, status: $status, notes: $notes) { id status updatedAt }
+//   }
+// `;
 
 // ── REVIEWS ───────────────────────────────────────────────────────────────────
 export const CREATE_REVIEW_MUTATION = `
@@ -301,21 +301,21 @@ export const DELETE_SAVED_SEARCH_MUTATION = `
 `;
 
 // ── TENANT / FRANCHISE ────────────────────────────────────────────────────────
-export const MY_TENANT_QUERY = `
-  query MyTenant {
-    myTenant {
-      id name status phone billingEmail city gstin
-      listingCount activeLeadCount staffCount ownerCount
-      plan { id name code maxListings maxStaff commissionPercent }
-    }
-  }
-`;
+// export const MY_TENANT_QUERY = `
+//   query MyTenant {
+//     myTenant {
+//       id name status phone billingEmail city gstin
+//       listingCount activeLeadCount staffCount ownerCount
+//       plan { id name code maxListings maxStaff commissionPercent }
+//     }
+//   }
+// `;
 
-export const TENANT_STAFF_QUERY = `
-  query TenantStaff {
-    tenantStaff { id name email role isActive createdAt }
-  }
-`;
+// export const TENANT_STAFF_QUERY = `
+//   query TenantStaff {
+//     tenantStaff { id name email role isActive createdAt }
+//   }
+// `;
 
 // ── DASHBOARD / REPORTS ───────────────────────────────────────────────────────
 export const DASHBOARD_STATS_QUERY = `
@@ -362,4 +362,68 @@ export const SEARCH_FILTER_OPTIONS_QUERY = `
     bhkOptions
     possessionStatusOptions
   }
+`;
+// ── Apply these replacements in queries.js ──────────────────────────────
+
+// 1) TENANT_LEADS_QUERY — was calling a non-existent `tenantLeads` query.
+//    Backend field is `leads`, filter type is `LeadFilterInput`, and
+//    Lead has no `updatedAt` field (removed it from the selection).
+export const TENANT_LEADS_QUERY = `
+  query TenantLeads($filter: LeadFilterInput, $pagination: PaginationInput) {
+    leads(filter: $filter, pagination: $pagination) {
+      items {
+        id status source budgetLabel contactName contactPhone contactEmail
+        message createdAt
+        property { id title city priceDisplay }
+        assignedAgent { id name }
+      }
+      pageInfo { totalCount hasNextPage }
+    }
+  }
+`;
+
+// // 2) UPDATE_LEAD_STATUS_MUTATION — backend arg is `note`, not `notes`.
+export const UPDATE_LEAD_STATUS_MUTATION = `
+  mutation UpdateLeadStatus($id: ID!, $status: LeadStatus!, $note: String) {
+    updateLeadStatus(id: $id, status: $status, note: $note) { id status }
+  }
+`;
+
+// 3) MY_PROPERTIES_QUERY — no `tenantId` variable needed. When a staff user
+//    calls `properties`, the resolver already scopes rows to their tenant
+//    via RLS (withTenant), so passing tenantId manually was both required-
+//    but-unused and redundant.
+export const MY_PROPERTIES_QUERY = `
+  query MyProperties($pagination: PaginationInput) {
+    properties(
+      pagination: $pagination
+      sort: { field: CREATED_AT, direction: DESC }
+    ) {
+      items { ${CARD} }
+      pageInfo { page pageSize totalCount hasNextPage }
+    }
+  }
+`;
+
+// NOTE: paste this inside queries.js where the existing \`CARD\` template
+// constant is already defined above — replace \${CARD} literally with the
+// same interpolation your existing PROPERTIES_QUERY / FEATURED_PROPERTIES_QUERY use.
+
+// 4) MY_TENANT_QUERY — fixed field names to match schema + new additions
+//    (ownerCount, plan.maxStaff, plan.commissionPercent added on backend).
+export const MY_TENANT_QUERY = `
+  query MyTenant {
+    myTenant {
+      id name status phone billingEmail city gstin
+      listingCount activeLeadCount staffCount ownerCount
+      plan { id name code maxListings maxStaff commissionPercent }
+  }
+}
+`;
+
+// 5) TENANT_STAFF_QUERY — unchanged shape, now backed by a real resolver.
+export const TENANT_STAFF_QUERY = `
+  query TenantStaff {
+    tenantStaff { id name email role isActive createdAt }
+}
 `;

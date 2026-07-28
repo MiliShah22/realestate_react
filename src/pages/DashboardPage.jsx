@@ -46,7 +46,7 @@ function Toggle({ initial = false, onChange }) {
 
 /* ── CUSTOMER SECTIONS ── */
 function CustomerOverview({ user, navigate, savedCount, leads }) {
-  const { data: statsData, loading } = useApi(CUSTOMER_DASHBOARD_STATS_QUERY, {}); // reserved
+  const { data: statsData, loading } = useApi(CUSTOMER_DASHBOARD_STATS_QUERY, {});
   const stats = statsData?.customerDashboardStats || { savedProperties: savedCount, enquiriesSent: leads?.length || 0, convertedLeads: leads?.filter(l => l.status === 'CONVERTED').length || 0, activeAlerts: 3 };
   return (
     <div>
@@ -164,36 +164,6 @@ function AlertsSection({ user }) {
   );
 }
 
-// function ReviewsSection() {
-//   const { data, loading, error, refetch } = useApi(MY_REVIEWS_QUERY);
-//   const reviews = data?.myReviews || [];
-//   if (loading) return <Spinner text="Loading reviews…" />;
-//   if (error) return <ApiError error={error} onRetry={refetch} />;
-//   const RBADGE = { APPROVED: 'badge-success', PENDING: 'badge-warning', REJECTED: 'badge-danger' };
-//   return (
-//     <div>
-//       <h2 className="dash-heading">My Reviews</h2>
-//       {reviews.length === 0
-//         ? <EmptyState icon="ti-star" title="No reviews yet" description="After visiting a property, leave a review to help other buyers." />
-//         : <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-//           {reviews.map(r => (
-//             <div className="card" key={r.id} style={{ padding: '16px 20px' }}>
-//               <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, marginBottom: 8 }}>
-//                 <span style={{ fontWeight: 600 }}>{r.property?.title}</span>
-//                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-//                   <div style={{ display: 'flex', gap: 2 }}>{[1, 2, 3, 4, 5].map(i => <i key={i} className={`ti ${i <= r.rating ? 'ti-star-filled' : 'ti-star'}`} style={{ fontSize: 14, color: i <= r.rating ? 'var(--gold)' : 'var(--border2)' }}></i>)}</div>
-//                   <span className={`badge ${RBADGE[r.status] || 'badge-navy'}`}>{r.status}</span>
-//                 </div>
-//               </div>
-//               <p style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>{r.body || r.title}</p>
-//               <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 6 }}>{new Date(r.createdAt).toLocaleDateString('en-IN')}</div>
-//             </div>
-//           ))}
-//         </div>
-//       }
-//     </div>
-//   );
-// }
 function ReviewsSection() {
   const { data, loading, error, refetch } = useApi(MY_REVIEWS_QUERY);
   const reviews = data?.myReviews?.items || [];
@@ -263,7 +233,7 @@ function ReviewsSection() {
 }
 
 /* ── FRANCHISE SECTIONS ── */
-function FranchiseOverview({ user, tenant, tenantLoading, stats, statsLoading }) {
+function FranchiseOverview({ user, tenant, tenantLoading, dashboardStats, statsLoading }) {
   return (
     <div>
       <div className="franchise-header">
@@ -290,13 +260,23 @@ function FranchiseOverview({ user, tenant, tenantLoading, stats, statsLoading })
         <div className="stat-card"><div className="sc-num">{tenant?.staffCount || 0}</div><div className="sc-label">Team Members</div></div>
         <div className="stat-card"><div className="sc-num">{tenant?.plan?.name || 'Starter'}</div><div className="sc-label">Current Plan</div></div>
       </div>
+
+      <div style={{ marginTop: 20 }}>
+        <div className="section-head"><h2 className="section-title" style={{ fontSize: 18 }}>This Month</h2></div>
+        <div className="stat-cards">
+          <div className="stat-card"><div className="sc-num">{statsLoading ? '—' : (dashboardStats?.newLeads ?? 0)}</div><div className="sc-label">New Leads (30d)</div></div>
+          <div className="stat-card"><div className="sc-num">{statsLoading ? '—' : (dashboardStats?.pendingReviews ?? 0)}</div><div className="sc-label">Pending Reviews</div></div>
+          <div className="stat-card"><div className="sc-num">{statsLoading ? '—' : (dashboardStats?.totalProperties ?? 0)}</div><div className="sc-label">Active Listings (Tenant)</div></div>
+          <div className="stat-card"><div className="sc-num">{statsLoading ? '—' : (dashboardStats?.activeUsers ?? 0)}</div><div className="sc-label">Active Team Users</div></div>
+        </div>
+      </div>
     </div>
   );
 }
 
 function MyListingsSection({ navigate }) {
   const { data, loading, error, refetch } = useApi(MY_PROPERTIES_QUERY, { pagination: { page: 1, pageSize: 20 } });
-  const items = data?.myProperties?.items || [];
+  const items = data?.properties?.items || [];
   if (loading) return <Spinner text="Loading listings…" />;
   if (error) return <ApiError error={error} onRetry={refetch} />;
   return (
@@ -321,7 +301,7 @@ function MyListingsSection({ navigate }) {
 function LeadsSection() {
   const { data, loading, error, refetch } = useApi(TENANT_LEADS_QUERY, { pagination: { page: 1, pageSize: 50 } });
   const [updateStatus] = useMutation(UPDATE_LEAD_STATUS_MUTATION);
-  const leads = data?.tenantLeads?.items || [];
+  const leads = data?.leads?.items || [];
 
   async function changeStatus(id, status) {
     try {
@@ -386,24 +366,110 @@ function PostPropertySection() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
+
+  const DESCRIPTION_MAX = 1000;
+  const CARPET_AREA_MAX = 100000; // sq.ft — sanity ceiling
+
+  function parsePrice(raw) {
+    const cleaned = (raw || '').replace(/,/g, '').trim();
+    if (!cleaned) return null;
+    if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return NaN; // reject letters, multiple dots, etc.
+    return parseFloat(cleaned);
+  }
+
+  function validateStep1() {
+    const errs = {};
+
+    const priceValue = parsePrice(form.price);
+    if (!form.price.trim()) {
+      errs.price = 'Expected price is required.';
+    } else if (Number.isNaN(priceValue)) {
+      errs.price = 'Enter a valid amount, e.g. 75,00,000 (digits only, commas allowed).';
+    } else if (priceValue <= 0) {
+      errs.price = 'Price must be greater than ₹0.';
+    } else if (priceValue > 5000000000) {
+      errs.price = 'That price looks unusually high — please double-check it.';
+    }
+
+    if (form.carpetArea) {
+      const area = Number(form.carpetArea);
+      if (!Number.isFinite(area) || area <= 0) {
+        errs.carpetArea = 'Carpet area must be a positive number.';
+      } else if (area > CARPET_AREA_MAX) {
+        errs.carpetArea = `Carpet area looks too large (max ${CARPET_AREA_MAX.toLocaleString('en-IN')} sq.ft).`;
+      }
+    }
+
+    return errs;
+  }
+
+  function validateStep2() {
+    const errs = {};
+
+    if (!form.city.trim()) {
+      errs.city = 'City is required.';
+    }
+
+    const locality = form.locality.trim();
+    if (!locality) {
+      errs.locality = 'Locality is required.';
+    } else if (locality.length < 2) {
+      errs.locality = 'Locality name looks too short.';
+    } else if (locality.length > 150) {
+      errs.locality = 'Locality name is too long (max 150 characters).';
+    }
+
+    if (form.description && form.description.length > DESCRIPTION_MAX) {
+      errs.description = `Description is too long (max ${DESCRIPTION_MAX} characters).`;
+    }
+
+    return errs;
+  }
+
+  function handleContinue() {
+    const errs = validateStep1();
+    setFieldErrors(errs);
+    if (Object.keys(errs).length === 0) {
+      setError('');
+      setStep(2);
+    } else {
+      setError('Please fix the highlighted fields before continuing.');
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!form.price || !form.city || !form.locality) { setError('Please fill all required fields.'); return; }
+
+    const step1Errs = validateStep1();
+    const step2Errs = validateStep2();
+    const allErrs = { ...step1Errs, ...step2Errs };
+    setFieldErrors(allErrs);
+
+    if (Object.keys(allErrs).length > 0) {
+      // If the problem is back on step 1, send the user there so they can see it.
+      if (Object.keys(step1Errs).length > 0) setStep(1);
+      setError('Please fix the highlighted fields before submitting.');
+      return;
+    }
+
     setSubmitting(true); setError('');
     try {
+      const bhkLabel = form.bhk === 'STUDIO' ? 'Studio' : form.bhk.replace('_', ' ');
+      const possessionStatus = form.status === 'READY_TO_MOVE' ? 'Ready to Move' : 'Under Construction';
+
       await gql(CREATE_PROPERTY_MUTATION, {
         input: {
-          title: `${form.bhk.replace('_', ' ')} ${form.propertyType.charAt(0) + form.propertyType.slice(1).toLowerCase()} in ${form.locality}`,
-          propertyType: form.propertyType,
-          bhkConfig: form.bhk,
+          title: `${bhkLabel} ${form.propertyType.charAt(0) + form.propertyType.slice(1).toLowerCase()} in ${form.locality.trim()}`,
+          description: form.description.trim() || undefined,
           listingType: form.listingType,
-          pricePaise: Math.round(parseFloat(form.price.replace(/,/g, '')) * 100),
-          carpetAreaSqft: form.carpetArea ? parseInt(form.carpetArea) : undefined,
+          propertyType: form.propertyType,
+          bhk: bhkLabel,
+          pricePaise: Math.round(parsePrice(form.price) * 100),
+          carpetAreaSqft: form.carpetArea ? parseInt(form.carpetArea, 10) : undefined,
+          possessionStatus,
           city: form.city,
-          locality: form.locality,
-          status: form.status,
-          description: form.description,
+          locality: form.locality.trim(),
         }
       });
       setSuccess(true);
@@ -418,13 +484,29 @@ function PostPropertySection() {
           <i className="ti ti-check"></i>
         </div>
         <h3 style={{ fontFamily: 'Playfair Display,serif', fontSize: 20, marginBottom: 8 }}>Property Submitted!</h3>
-        <p style={{ fontSize: 14, color: 'var(--text3)' }}>Your listing is under review and will go live within 24 hours.</p>
-        <button className="btn-navy" style={{ marginTop: 20, padding: '10px 24px', borderRadius: 8 }} onClick={() => setSuccess(false)}>Post Another</button>
+        <p style={{ fontSize: 14, color: 'var(--text3)' }}>Your listing was created as a Draft. Submit it for review from "My Listings" when ready.</p>
+        <button className="btn-navy" style={{ marginTop: 20, padding: '10px 24px', borderRadius: 8 }}
+          onClick={() => {
+            setSuccess(false);
+            setStep(1);
+            setFieldErrors({});
+            setForm({ listingType: 'SALE', propertyType: 'APARTMENT', bhk: '2_BHK', price: '', carpetArea: '', city: 'Bengaluru', locality: '', status: 'UNDER_CONSTRUCTION', description: '' });
+          }}>Post Another</button>
       </div>
     </div>
   );
 
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const set = (k, v) => {
+    setForm(f => ({ ...f, [k]: v }));
+    if (fieldErrors[k]) setFieldErrors(fe => { const next = { ...fe }; delete next[k]; return next; });
+  };
+
+  const fieldError = (name) => fieldErrors[name]
+    ? <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 4 }}>{fieldErrors[name]}</div>
+    : null;
+
+  const errorBorder = (name) => fieldErrors[name] ? { borderColor: 'var(--danger)' } : undefined;
+
   return (
     <div>
       <h2 className="dash-heading">Post Your Property</h2>
@@ -456,33 +538,63 @@ function PostPropertySection() {
                     <option value="1_BHK">1 BHK</option><option value="2_BHK">2 BHK</option>
                     <option value="3_BHK">3 BHK</option><option value="4_BHK">4 BHK</option><option value="STUDIO">Studio</option>
                   </select></div>
-                <div className="form-group"><label className="form-label">Expected Price (₹)</label>
-                  <input type="text" className="form-control" placeholder="e.g. 75,00,000" value={form.price} onChange={e => set('price', e.target.value)} /></div>
+                <div className="form-group">
+                  <label className="form-label">Expected Price (₹) *</label>
+                  <input type="text" className="form-control" placeholder="e.g. 75,00,000"
+                    style={errorBorder('price')}
+                    value={form.price} onChange={e => set('price', e.target.value)}
+                    aria-invalid={!!fieldErrors.price} />
+                  {fieldError('price')}
+                </div>
               </div>
               <div className="form-row">
-                <div className="form-group"><label className="form-label">Carpet Area (sq.ft)</label>
-                  <input type="number" className="form-control" placeholder="e.g. 1200" value={form.carpetArea} onChange={e => set('carpetArea', e.target.value)} /></div>
+                <div className="form-group">
+                  <label className="form-label">Carpet Area (sq.ft)</label>
+                  <input type="number" className="form-control" placeholder="e.g. 1200"
+                    style={errorBorder('carpetArea')}
+                    value={form.carpetArea} onChange={e => set('carpetArea', e.target.value)}
+                    aria-invalid={!!fieldErrors.carpetArea} />
+                  {fieldError('carpetArea')}
+                </div>
                 <div className="form-group"><label className="form-label">Possession Status</label>
                   <select className="form-control" value={form.status} onChange={e => set('status', e.target.value)}>
                     <option value="READY_TO_MOVE">Ready to Move</option><option value="UNDER_CONSTRUCTION">Under Construction</option>
                   </select></div>
               </div>
-              <button type="button" className="btn-navy" style={{ padding: '12px 24px' }} onClick={() => setStep(2)}>Continue →</button>
+              <button type="button" className="btn-navy" style={{ padding: '12px 24px' }} onClick={handleContinue}>Continue →</button>
             </div>
           )}
           {step === 2 && (
             <div className="form-section">
               <h4>Location Details</h4>
               <div className="form-row">
-                <div className="form-group"><label className="form-label">City *</label>
-                  <select className="form-control" value={form.city} onChange={e => set('city', e.target.value)}>
+                <div className="form-group">
+                  <label className="form-label">City *</label>
+                  <select className="form-control" style={errorBorder('city')} value={form.city} onChange={e => set('city', e.target.value)}>
                     {['Bengaluru', 'Mumbai', 'Delhi NCR', 'Hyderabad', 'Pune', 'Chennai', 'Gurugram', 'Ahmedabad'].map(c => <option key={c}>{c}</option>)}
-                  </select></div>
-                <div className="form-group"><label className="form-label">Locality *</label>
-                  <input type="text" className="form-control" placeholder="e.g. Whitefield" value={form.locality} onChange={e => set('locality', e.target.value)} /></div>
+                  </select>
+                  {fieldError('city')}
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Locality *</label>
+                  <input type="text" className="form-control" placeholder="e.g. Whitefield"
+                    style={errorBorder('locality')}
+                    value={form.locality} onChange={e => set('locality', e.target.value)}
+                    aria-invalid={!!fieldErrors.locality} />
+                  {fieldError('locality')}
+                </div>
               </div>
-              <div className="form-group"><label className="form-label">Description</label>
-                <textarea className="form-control" rows="4" placeholder="Describe the property, amenities, connectivity..." value={form.description} onChange={e => set('description', e.target.value)}></textarea></div>
+              <div className="form-group">
+                <label className="form-label">Description</label>
+                <textarea className="form-control" rows="4" placeholder="Describe the property, amenities, connectivity..."
+                  style={errorBorder('description')}
+                  maxLength={DESCRIPTION_MAX}
+                  value={form.description} onChange={e => set('description', e.target.value)}></textarea>
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 4, textAlign: 'right' }}>
+                  {form.description.length}/{DESCRIPTION_MAX}
+                </div>
+                {fieldError('description')}
+              </div>
               <div style={{ display: 'flex', gap: 10 }}>
                 <button type="button" className="btn-outline" style={{ padding: '12px 20px' }} onClick={() => setStep(1)}>← Back</button>
                 <button type="submit" className="btn-navy" style={{ padding: '12px 28px' }} disabled={submitting}>
@@ -496,6 +608,7 @@ function PostPropertySection() {
     </div>
   );
 }
+
 
 function AgentsSection({ isFranchise }) {
   const { data, loading, error, refetch } = useApi(TENANT_STAFF_QUERY, {}, { skip: !isFranchise });
@@ -544,9 +657,7 @@ function SettingsSection({ user, updateUser }) {
     e.preventDefault();
     setSaving(true); setError('');
     try {
-      // updateProfile takes flat args (name, phone, city) not an input object
       const data = await updateProfile({ name: form.name, phone: form.phone, city: form.city });
-      // Merge returned fields back into user, keeping existing avatar
       updateUser({ ...data.updateProfile, avatar: data.updateProfile.avatarUrl || user.avatar });
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
@@ -606,7 +717,12 @@ export default function DashboardPage() {
   );
   const tenant = tenantData?.myTenant;
 
-  // Leads for customer overview badge
+  // Tenant-scoped platform stats (pendingReviews, newLeads, etc.) for franchise overview
+  const { data: dashboardStatsData, loading: dashboardStatsLoading } = useApi(
+    DASHBOARD_STATS_QUERY, {}, { skip: isCustomer }
+  );
+
+  // Leads/enquiries for customer overview badge
   const { data: myLeadsData } = useApi(
     MY_LEADS_QUERY, { pagination: { page: 1, pageSize: 5 } }, { skip: !isCustomer }
   );
@@ -648,7 +764,7 @@ export default function DashboardPage() {
         {/* MAIN */}
         <div className="dash-main">
           {/* CUSTOMER */}
-          {isCustomer && section === 'overview' && <CustomerOverview user={user} navigate={navigate} savedCount={savedCount} leads={myLeadsData?.myLeads?.items} />}
+          {isCustomer && section === 'overview' && <CustomerOverview user={user} navigate={navigate} savedCount={savedCount} leads={myLeadsData?.myEnquiries?.items} />}
           {isCustomer && section === 'saved' && <SavedPropertiesSection navigate={navigate} />}
           {isCustomer && section === 'enquiries' && <EnquiriesSection />}
           {isCustomer && section === 'alerts' && <AlertsSection user={user} />}
@@ -657,7 +773,7 @@ export default function DashboardPage() {
           {isCustomer && section === 'settings' && <SettingsSection user={user} updateUser={updateUser} />}
 
           {/* FRANCHISE */}
-          {!isCustomer && section === 'overview' && <FranchiseOverview user={user} tenant={tenant} tenantLoading={tenantLoading} stats={null} statsLoading={false} />}
+          {!isCustomer && section === 'overview' && <FranchiseOverview user={user} tenant={tenant} tenantLoading={tenantLoading} dashboardStats={dashboardStatsData?.dashboardStats} statsLoading={dashboardStatsLoading} />}
           {!isCustomer && section === 'listings' && <MyListingsSection navigate={navigate} />}
           {!isCustomer && section === 'leads' && <LeadsSection />}
           {!isCustomer && section === 'post' && <PostPropertySection />}

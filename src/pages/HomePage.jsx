@@ -4,7 +4,13 @@ import Navbar from '../components/Navbar.jsx';
 import Footer from '../components/Footer.jsx';
 import PropCard from '../components/PropCard.jsx';
 import { gql } from '../lib/gqlClient.js';
-import { PROPERTIES_QUERY, PROPERTY_TYPE_COUNTS_QUERY, TOP_CITIES_QUERY, PLATFORM_STATS_QUERY } from '../lib/queries.js';
+import {
+  PROPERTIES_QUERY,
+  PROPERTY_TYPE_COUNTS_QUERY,
+  TOP_CITIES_QUERY,
+  PLATFORM_STATS_QUERY,
+  SEARCH_FILTER_OPTIONS_QUERY,
+} from '../lib/queries.js';
 import { adaptProperties } from '../lib/adapt.js';
 
 const TABS = [
@@ -25,6 +31,18 @@ const PROPERTY_TYPE_ICON = {
 };
 
 const CITY_COLOR_CLASSES = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
+
+// Budget dropdown labels mapped to real minPrice/maxPrice in paise, so the
+// hero search box's Budget filter actually matches what SearchPage filters
+// on, instead of passing a human label that gets silently ignored.
+// 1 Lakh (₹) = 10,000,000 paise; 1 Cr (₹) = 100x that.
+const BUDGET_RANGES = {
+  'Under ₹30L': { maxPrice: 300000000 },
+  '₹30L – ₹60L': { minPrice: 300000000, maxPrice: 600000000 },
+  '₹60L – ₹1Cr': { minPrice: 600000000, maxPrice: 1000000000 },
+  '₹1Cr – ₹2Cr': { minPrice: 1000000000, maxPrice: 2000000000 },
+  'Above ₹2Cr': { minPrice: 2000000000 },
+};
 
 function formatCount(n) {
   if (n >= 100000) return `${(n / 100000).toFixed(1).replace(/\.0$/, '')}L`;
@@ -48,127 +66,82 @@ export default function HomePage() {
 
   const [cities, setCities] = useState([]);
   const [loadingCities, setLoadingCities] = useState(true);
-  const [stats, setStats] = useState(null);
 
+  const [stats, setStats] = useState(null);
   const [loadingStats, setLoadingStats] = useState(true);
 
-  useEffect(() => {
+  const [bhkOptions, setBhkOptions] = useState([]);
+  const [loadingBhkOptions, setLoadingBhkOptions] = useState(true);
 
+  useEffect(() => {
     let cancelled = false;
 
     (async () => {
-
-      const [featuredRes, typesRes, citiesRes, statsRes] = await Promise.allSettled([
-
+      const [featuredRes, typesRes, citiesRes, statsRes, filterOptsRes] = await Promise.allSettled([
         gql(PROPERTIES_QUERY, {
-
           filter: { isFeatured: true },
-
           pagination: { page: 1, pageSize: 4 },
-
           sort: { field: 'VIEW_COUNT', direction: 'DESC' },
-
         }),
-
         gql(PROPERTY_TYPE_COUNTS_QUERY),
-
         gql(TOP_CITIES_QUERY, { limit: 6 }),
-
         gql(PLATFORM_STATS_QUERY),
-
+        gql(SEARCH_FILTER_OPTIONS_QUERY),
       ]);
 
       if (cancelled) return;
 
-      setFeatured(
-
-        featuredRes.status === 'fulfilled'
-
-          ? adaptProperties(featuredRes.value.properties?.items || [])
-
-          : []
-
-      );
-
+      if (featuredRes.status === 'fulfilled') {
+        setFeatured(adaptProperties(featuredRes.value.properties?.items || []));
+      } else {
+        console.warn('Failed to load featured properties', featuredRes.reason?.message);
+        setFeatured([]);
+      }
       setLoadingFeatured(false);
 
-      setTypeCounts(
-
-        typesRes.status === 'fulfilled' ? typesRes.value.propertyTypeCounts || [] : []
-
-      );
-
+      if (typesRes.status === 'fulfilled') {
+        setTypeCounts(typesRes.value.propertyTypeCounts || []);
+      } else {
+        console.warn('Failed to load property type counts', typesRes.reason?.message);
+        setTypeCounts([]);
+      }
       setLoadingTypes(false);
 
-      setCities(
-
-        citiesRes.status === 'fulfilled' ? citiesRes.value.topCities || [] : []
-
-      );
-
+      if (citiesRes.status === 'fulfilled') {
+        setCities(citiesRes.value.topCities || []);
+      } else {
+        console.warn('Failed to load top cities', citiesRes.reason?.message);
+        setCities([]);
+      }
       setLoadingCities(false);
 
-      setStats(
-
-        statsRes.status === 'fulfilled' ? statsRes.value.platformStats || null : null
-
-      );
-
+      if (statsRes.status === 'fulfilled') {
+        setStats(statsRes.value.platformStats || null);
+      } else {
+        console.warn('Failed to load platform stats', statsRes.reason?.message);
+        setStats(null);
+      }
       setLoadingStats(false);
 
+      if (filterOptsRes.status === 'fulfilled') {
+        setBhkOptions(filterOptsRes.value.bhkOptions || []);
+      } else {
+        console.warn('Failed to load BHK options', filterOptsRes.reason?.message);
+        setBhkOptions([]);
+      }
+      setLoadingBhkOptions(false);
     })();
 
     return () => { cancelled = true; };
-
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const data = await gql(PROPERTIES_QUERY, {
-          filter: { isFeatured: true },
-          pagination: { page: 1, pageSize: 4 },
-          sort: { field: 'VIEW_COUNT', direction: 'DESC' },
-        });
-        setFeatured(adaptProperties(data.properties?.items || []));
-      } catch (e) {
-        console.warn('Failed to load featured properties', e.message);
-        setFeatured([]);
-      } finally {
-        setLoadingFeatured(false);
-      }
-    })();
-
-    (async () => {
-      try {
-        const data = await gql(PROPERTY_TYPE_COUNTS_QUERY);
-        setTypeCounts(data.propertyTypeCounts || []);
-      } catch (e) {
-        console.warn('Failed to load property type counts', e.message);
-        setTypeCounts([]);
-      } finally {
-        setLoadingTypes(false);
-      }
-    })();
-
-    (async () => {
-      try {
-        const data = await gql(TOP_CITIES_QUERY, { limit: 6 });
-        setCities(data.topCities || []);
-      } catch (e) {
-        console.warn('Failed to load top cities', e.message);
-        setCities([]);
-      } finally {
-        setLoadingCities(false);
-      }
-    })();
   }, []);
 
   function doSearch() {
     const params = new URLSearchParams({ type: tab });
     if (q) params.set('q', q);
     if (bhk) params.set('bhk', bhk);
-    if (budget) params.set('budget', budget);
+    const range = BUDGET_RANGES[budget];
+    if (range?.minPrice != null) params.set('minPrice', String(range.minPrice));
+    if (range?.maxPrice != null) params.set('maxPrice', String(range.maxPrice));
     navigate(`/search?${params.toString()}`);
   }
 
@@ -189,17 +162,17 @@ export default function HomePage() {
             <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : `${formatCount(stats?.totalProperties || 0)}+`}</div>
             <div className="h-stat-lbl">Properties</div>
           </div>
-          <div className="hero-stats-div"></div>
+          <div className="h-stat-div"></div>
           <div>
             <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : `${stats?.totalCities || 0}+`}</div>
             <div className="h-stat-lbl">Cities</div>
           </div>
-          <div className="hero-stats-div"></div>
+          <div className="h-stat-div"></div>
           <div>
             <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : formatCount(stats?.totalBuyers || 0)}</div>
             <div className="h-stat-lbl">Buyers</div>
           </div>
-          <div className="hero-stats-div"></div>
+          <div className="h-stat-div"></div>
           <div>
             <div className="h-stat-num">{loadingStats ? <span className="stat-skel" /> : `${formatCount(stats?.totalAgents || 0)}+`}</div>
             <div className="h-stat-lbl">Agents</div>
@@ -221,21 +194,20 @@ export default function HomePage() {
                 value={q} onChange={e => setQ(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && doSearch()} />
             </div>
-            <select className="s-sel" value={bhk} onChange={e => setBhk(e.target.value)}>
-              <option value="">BHK Type</option>
-              <option>1 BHK</option><option>2 BHK</option><option>3 BHK</option>
-              <option>4+ BHK</option><option>Villa / Plot</option>
+            <select className="s-sel" value={bhk} onChange={e => setBhk(e.target.value)} disabled={loadingBhkOptions}>
+              <option value="">{loadingBhkOptions ? 'Loading…' : 'BHK Type'}</option>
+              {bhkOptions.map(b => <option key={b} value={b}>{b}</option>)}
             </select>
             <select className="s-sel" value={budget} onChange={e => setBudget(e.target.value)}>
               <option value="">Budget</option>
-              <option>Under ₹30L</option><option>₹30L – ₹60L</option>
-              <option>₹60L – ₹1Cr</option><option>₹1Cr – ₹2Cr</option><option>Above ₹2Cr</option>
+              {Object.keys(BUDGET_RANGES).map(label => (
+                <option key={label} value={label}>{label}</option>
+              ))}
             </select>
             <button className="s-btn" onClick={doSearch}>
               <i className="ti ti-search"></i> Search
             </button>
           </div>
-          {/* unchanged — tabs, search row, BHK/budget selects, search button */}
         </div>
       </section>
 
