@@ -1,72 +1,193 @@
 import { useMemo, useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Navbar from '../components/Navbar.jsx';
 import { adaptProperty } from '../lib/adapt.js';
 import { gql } from '../lib/gqlClient.js';
-import { PROPERTIES_QUERY } from '../lib/queries.js';
+import { PROPERTY_TYPE_COUNTS_QUERY } from '../lib/queries.js';
 
-const COLOR_MAP = { APARTMENT:'blue', VILLA:'green', PLOT:'warm', COMMERCIAL:'purple', PG:'teal', STUDIO:'rose' };
+// Dedicated map query — the shared CARD fragment used elsewhere doesn't
+// include latitude/longitude, which is what actually drives pin placement here.
+const MAP_PROPERTIES_QUERY = `
+  query MapProperties($filter: PropertyFilterInput, $pagination: PaginationInput, $sort: PropertySortInput) {
+    properties(filter: $filter, pagination: $pagination, sort: $sort) {
+      items {
+        id title city locality
+        listingType propertyType bhk
+        priceDisplay pricePaise carpetAreaSqft
+        latitude longitude
+        status possessionStatus
+        isFeatured isVerified viewCount rating reviewCount
+        images { id url isCover sortOrder }
+        createdAt
+      }
+      pageInfo { totalCount hasNextPage }
+    }
+  }
+`;
 
-// Deterministic pseudo-positions based on property index so pins don't jump
-const POSITIONS = [
-  { left:'22%', top:'28%' }, { left:'38%', top:'42%' }, { left:'55%', top:'35%' },
-  { left:'68%', top:'55%' }, { left:'30%', top:'62%' }, { left:'72%', top:'25%' },
-  { left:'45%', top:'70%' }, { left:'60%', top:'75%' }, { left:'20%', top:'48%' },
-  { left:'80%', top:'40%' }, { left:'35%', top:'20%' }, { left:'62%', top:'18%' },
+// Fallback pseudo-positions for properties missing lat/lng, so a pin still
+// renders somewhere sensible instead of disappearing.
+const FALLBACK_POSITIONS = [
+  { left: '22%', top: '28%' }, { left: '38%', top: '42%' }, { left: '55%', top: '35%' },
+  { left: '68%', top: '55%' }, { left: '30%', top: '62%' }, { left: '72%', top: '25%' },
+  { left: '45%', top: '70%' }, { left: '60%', top: '75%' }, { left: '20%', top: '48%' },
+  { left: '80%', top: '40%' }, { left: '35%', top: '20%' }, { left: '62%', top: '18%' },
 ];
 
-const FILTER_TABS = [
-  ['all',        'All'],
-  ['APARTMENT',  'Apartments'],
-  ['VILLA',      'Villas'],
-  ['PLOT',       'Plots'],
-  ['COMMERCIAL', 'Commercial'],
-];
-
+// Mirrors SearchPage's mapping so /map and /search agree on what a given
+// navbar tab means — this is what keeps their result counts consistent.
+function deriveNavFilter(type) {
+  switch (type) {
+    case 'rent': return { listingType: 'RENT' };
+    case 'pg': return { listingType: 'PG' };
+    case 'commercial': return { propertyType: 'COMMERCIAL' };
+    case 'projects': return { possessionStatus: 'Under Construction' };
+    case 'buy': return { listingType: 'SALE' };
+    default: return {};
+  }
+}
 
 export default function MapPage() {
   const navigate = useNavigate();
-  const [query,      setQuery]      = useState('');
-  const [filterType, setFilterType] = useState('all');
-  const [activeId,   setActiveId]   = useState(null);
-  const [properties, setProperties] = useState([]);
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState('');
+  const [searchParams] = useSearchParams();
 
-  // Load all properties (up to 50) for map pins
+  const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [filterType, setFilterType] = useState('all');
+  const [activeId, setActiveId] = useState(null);
+  const [properties, setProperties] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const [typeTabs, setTypeTabs] = useState([]); // dynamic filter tabs from propertyTypeCounts
+  const [loadingTabs, setLoadingTabs] = useState(true);
+
+  const cityParam = searchParams.get('city') || '';
+  const typeParam = searchParams.get('type') || '';
+
+  // Debounce the free-text search box so it doesn't fire an API call on every keystroke.
   useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 350);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  // Load the dynamic filter tabs once (independent of the active filters).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingTabs(true);
+      try {
+        const data = await gql(PROPERTY_TYPE_COUNTS_QUERY);
+        if (!cancelled) setTypeTabs(data.propertyTypeCounts || []);
+      } catch (e) {
+        console.warn('Failed to load property type tabs', e.message);
+        if (!cancelled) setTypeTabs([]);
+      } finally {
+        if (!cancelled) setLoadingTabs(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Re-query the API every time a filter actually changes — city (from the URL),
+  // property type tab, or the debounced search text. This is what makes the
+  // tabs/search box genuinely filter, instead of slicing a fixed 50-item batch
+  // loaded once on mount.
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       setLoading(true); setError('');
+
+      const derived = deriveNavFilter(typeParam);
+      const filter = {};
+      if (cityParam) filter.city = cityParam;
+      // The property-type tab is a manual override; the nav type param is the
+      // fallback default so /map?type=commercial pre-filters like /search does.
+      if (filterType !== 'all') filter.propertyType = filterType;
+      else if (derived.propertyType) filter.propertyType = derived.propertyType;
+      if (derived.listingType) filter.listingType = derived.listingType;
+      if (derived.possessionStatus) filter.possessionStatus = derived.possessionStatus;
+      if (debouncedQuery) filter.search = debouncedQuery;
+
       try {
-        const data = await gql(PROPERTIES_QUERY, {
-          filter: {},
+        const data = await gql(MAP_PROPERTIES_QUERY, {
+          filter,
           pagination: { page: 1, pageSize: 50 },
           sort: { field: 'VIEW_COUNT', direction: 'DESC' },
         });
-        setProperties((data.properties?.items || []).map(adaptProperty));
+        if (cancelled) return;
+        const items = data.properties?.items || [];
+        setProperties(items.map(raw => ({
+          ...adaptProperty(raw),
+          id: raw.id,
+          latitude: raw.latitude != null ? Number(raw.latitude) : null,
+          longitude: raw.longitude != null ? Number(raw.longitude) : null,
+          listingType: raw.listingType,
+          propertyType: raw.propertyType,
+        })));
       } catch (e) {
+        if (cancelled) return;
+        console.warn('Failed to load map properties', e.message);
         setError(e.message || 'Failed to load map data.');
+        setProperties([]);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [cityParam, typeParam, filterType, debouncedQuery]);
 
-  const filtered = useMemo(() => {
-    let list = [...properties];
-    if (query) {
-      const q = query.toLowerCase();
-      list = list.filter(p => p.name.toLowerCase().includes(q) || p.loc.toLowerCase().includes(q));
+  // Normalize real lat/lng into 10%–90% screen-space coordinates so pins
+  // reflect actual relative geographic spread instead of a fixed cycling list.
+  // Positions are keyed by property id (not list index) so they stay put
+  // when the visible set changes due to search/filtering.
+  const positionsById = useMemo(() => {
+    const withCoords = properties.filter(p => typeof p.latitude === 'number' && typeof p.longitude === 'number');
+    const map = {};
+    if (withCoords.length === 0) {
+      properties.forEach((p, i) => { map[p.id] = FALLBACK_POSITIONS[i % FALLBACK_POSITIONS.length]; });
+      return map;
     }
-    if (filterType !== 'all') {
-      list = list.filter(p => p.type === filterType);
-    }
-    return list;
-  }, [properties, query, filterType]);
 
-  const active     = filtered.find(p => p.id === activeId);
-  const activeIdx  = filtered.findIndex(p => p.id === activeId);
-  const activePos  = activeIdx >= 0 ? POSITIONS[activeIdx % POSITIONS.length] : null;
+    const lats = withCoords.map(p => p.latitude);
+    const lngs = withCoords.map(p => p.longitude);
+    const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+    const latSpan = (maxLat - minLat) || 1;
+    const lngSpan = (maxLng - minLng) || 1;
+
+    let fallbackIdx = 0;
+    properties.forEach((p) => {
+      if (typeof p.latitude === 'number' && typeof p.longitude === 'number') {
+        const left = 10 + ((p.longitude - minLng) / lngSpan) * 80;
+        const top = 10 + ((maxLat - p.latitude) / latSpan) * 80; // higher lat = further north = smaller top
+        map[p.id] = { left: `${left.toFixed(1)}%`, top: `${top.toFixed(1)}%` };
+      } else {
+        map[p.id] = FALLBACK_POSITIONS[fallbackIdx % FALLBACK_POSITIONS.length];
+        fallbackIdx += 1;
+      }
+    });
+    return map;
+  }, [properties]);
+
+  const filterTabs = useMemo(() => {
+    const tabs = [['all', 'All']];
+    typeTabs.forEach(t => tabs.push([t.propertyType, t.label]));
+    return tabs;
+  }, [typeTabs]);
+
+  // Server already applied city/propertyType/search filters — no client-side
+  // re-filtering needed, which is exactly the part that was silently broken before.
+  const filtered = properties;
+
+  const legendCounts = useMemo(() => {
+    const counts = { SALE: 0, RENT: 0, PG: 0 };
+    filtered.forEach(p => { if (counts[p.listingType] != null) counts[p.listingType] += 1; });
+    return counts;
+  }, [filtered]);
+
+  const active = filtered.find(p => p.id === activeId);
+  const activePos = active ? positionsById[active.id] : null;
 
   return (
     <>
@@ -82,25 +203,42 @@ export default function MapPage() {
                 value={query} onChange={e => setQuery(e.target.value)} />
             </div>
             <div className="map-filters">
-              {FILTER_TABS.map(([key, label]) => (
-                <span key={key} className={`mf-chip ${filterType === key ? 'active' : ''}`}
-                  onClick={() => setFilterType(key)}>
-                  {label}
-                </span>
-              ))}
+              {loadingTabs ? (
+                <span className="mf-chip" style={{ opacity: 0.5 }}>Loading…</span>
+              ) : (
+                filterTabs.map(([key, label]) => (
+                  <span key={key} className={`mf-chip ${filterType === key ? 'active' : ''}`}
+                    onClick={() => setFilterType(key)}>
+                    {label}
+                  </span>
+                ))
+              )}
             </div>
+            {cityParam && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <i className="ti ti-map-pin-filled"></i> Showing <strong style={{ color: 'var(--navy)' }}>{cityParam}</strong>
+                <button onClick={() => navigate('/map')} style={{ marginLeft: 4, background: 'none', border: 'none', color: 'var(--navy)', textDecoration: 'underline', cursor: 'pointer', fontSize: 12 }}>
+                  clear
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="map-results">
             {loading ? (
-              <div style={{textAlign:'center',padding:'40px 20px',color:'var(--text3)'}}>
-                <i className="ti ti-loader-2" style={{fontSize:28,display:'block',marginBottom:8,animation:'spin 1s linear infinite'}}></i>
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text3)' }}>
+                <i className="ti ti-loader-2" style={{ fontSize: 28, display: 'block', marginBottom: 8, animation: 'spin 1s linear infinite' }}></i>
                 Loading map data…
                 <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
               </div>
             ) : error ? (
-              <div style={{padding:'16px',fontSize:13,color:'var(--danger)'}}>
+              <div style={{ padding: '16px', fontSize: 13, color: 'var(--danger)' }}>
                 <i className="ti ti-alert-circle"></i> {error}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text3)' }}>
+                <i className="ti ti-map-off" style={{ fontSize: 32, display: 'block', marginBottom: 8, opacity: 0.4 }}></i>
+                No properties match this view.
               </div>
             ) : (
               <>
@@ -132,20 +270,21 @@ export default function MapPage() {
           onClick={e => { if (!e.target.closest('.map-pin') && !e.target.closest('.map-popup')) setActiveId(null); }}>
           <div className="map-placeholder">
             {/* Road grid */}
-            <div className="road-h major" style={{top:'30%'}}></div>
-            <div className="road-h" style={{top:'50%'}}></div>
-            <div className="road-h" style={{top:'70%'}}></div>
-            <div className="road-h" style={{top:'15%'}}></div>
-            <div className="road-h" style={{top:'85%'}}></div>
-            <div className="road-v major" style={{left:'40%'}}></div>
-            <div className="road-v" style={{left:'60%'}}></div>
-            <div className="road-v" style={{left:'20%'}}></div>
-            <div className="road-v" style={{left:'75%'}}></div>
-            <div className="road-v" style={{left:'85%'}}></div>
+            <div className="road-h major" style={{ top: '30%' }}></div>
+            <div className="road-h" style={{ top: '50%' }}></div>
+            <div className="road-h" style={{ top: '70%' }}></div>
+            <div className="road-h" style={{ top: '15%' }}></div>
+            <div className="road-h" style={{ top: '85%' }}></div>
+            <div className="road-v major" style={{ left: '40%' }}></div>
+            <div className="road-v" style={{ left: '60%' }}></div>
+            <div className="road-v" style={{ left: '20%' }}></div>
+            <div className="road-v" style={{ left: '75%' }}></div>
+            <div className="road-v" style={{ left: '85%' }}></div>
 
-            {/* Pins */}
-            {!loading && filtered.map((p, i) => {
-              const pos = POSITIONS[i % POSITIONS.length];
+            {/* Pins — positioned from real lat/lng, normalized into the viewport */}
+            {!loading && filtered.map((p) => {
+              const pos = positionsById[p.id];
+              if (!pos) return null;
               return (
                 <div key={p.id} className={`map-pin ${activeId === p.id ? 'active' : ''}`}
                   style={{ left: pos.left, top: pos.top }}
@@ -159,10 +298,10 @@ export default function MapPage() {
             {active && activePos && (
               <div className="map-popup" style={{
                 left: `${parseFloat(activePos.left) + (parseFloat(activePos.left) + 22 > 90 ? -24 : 2)}%`,
-                top:  `${parseFloat(activePos.top) + 2}%`,
+                top: `${parseFloat(activePos.top) + 2}%`,
               }}>
                 <div className={`popup-img ${active.color}`}>
-                  <i className="ti ti-building" style={{fontSize:32,color:'rgba(255,255,255,0.15)'}}></i>
+                  <i className="ti ti-building" style={{ fontSize: 32, color: 'rgba(255,255,255,0.15)' }}></i>
                 </div>
                 <div className="popup-body">
                   <div className="popup-price">{active.price}</div>
@@ -184,17 +323,17 @@ export default function MapPage() {
             <div className="mc-btn" title="Satellite view"><i className="ti ti-layers-difference"></i></div>
           </div>
 
-          {/* Legend */}
+          {/* Legend — live counts from the currently filtered set */}
           <div className="map-legend">
-            <div className="legend-row"><div className="leg-dot" style={{background:'var(--navy)'}}></div> For Sale</div>
-            <div className="legend-row"><div className="leg-dot" style={{background:'var(--sage)'}}></div> For Rent</div>
-            <div className="legend-row"><div className="leg-dot" style={{background:'var(--gold)'}}></div> New Project</div>
+            <div className="legend-row"><div className="leg-dot" style={{ background: 'var(--navy)' }}></div> For Sale {!loading && `(${legendCounts.SALE})`}</div>
+            <div className="legend-row"><div className="leg-dot" style={{ background: 'var(--sage)' }}></div> For Rent {!loading && `(${legendCounts.RENT})`}</div>
+            <div className="legend-row"><div className="leg-dot" style={{ background: 'var(--gold)' }}></div> PG / Co-living {!loading && `(${legendCounts.PG})`}</div>
           </div>
 
           {/* Loading overlay on map */}
           {loading && (
-            <div style={{position:'absolute',inset:0,background:'rgba(221,227,239,0.7)',display:'flex',alignItems:'center',justifyContent:'center'}}>
-              <i className="ti ti-loader-2" style={{fontSize:36,color:'var(--navy)',animation:'spin 1s linear infinite'}}></i>
+            <div style={{ position: 'absolute', inset: 0, background: 'rgba(221,227,239,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <i className="ti ti-loader-2" style={{ fontSize: 36, color: 'var(--navy)', animation: 'spin 1s linear infinite' }}></i>
               <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
             </div>
           )}

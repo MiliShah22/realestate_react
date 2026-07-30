@@ -71,8 +71,8 @@ export default function Navbar() {
                   <div className="nd-header">
                     <div className="nd-name">{user.name}</div>
                     <div className="nd-role">
-                      <span className={`nd-role-badge ${user.role === 'franchise' ? 'nd-role-franchise' : 'nd-role-customer'}`}>
-                        {user.role === 'franchise' ? '🏢 Franchise Partner' : '👤 Customer'}
+                      <span className={`nd-role-badge ${user.role === 'FRANCHISE_OWNER' ? 'nd-role-franchise' : 'nd-role-customer'}`}>
+                        {user.role === 'FRANCHISE_OWNER' ? '🏢 Franchise Owner' : '👤 Customer'}
                       </span>
                     </div>
                   </div>

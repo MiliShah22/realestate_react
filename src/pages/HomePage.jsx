@@ -155,7 +155,7 @@ export default function HomePage() {
         <div className="hero-glow2"></div>
         <div className="hero-eyebrow">India's Premium Property Platform</div>
         <h1>Find Your <em>Perfect</em><br />Home</h1>
-        <p className="hero-sub">Search from verified properties across 30+ cities</p>
+        <p className="hero-sub">Search from verified properties across {stats?.totalCities || 0}+ cities</p>
 
         <div className="hero-stats">
           <div>
